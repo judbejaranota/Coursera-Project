@@ -1,0 +1,190 @@
+---
+title: "PML_MY_PROJECT"
+author: "Juan David Bejarano"
+date: "22 de julio de 2015"
+output: html_document
+---
+
+# Final Project: Practical Machine Learning
+
+Fist of all, I want to apologyze if there are some gramar error. English is not my mother language.
+
+## Objetives
+The goal of your project is to predict "How well" six participants of an experiment  did the exercise
+```{r}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(reshape2)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(gbm)
+library(ggplot2) # Visualise data.
+library(plyr)
+library(dplyr)
+library(pheatmap) # Heatmaps.
+```
+
+## Importing Data
+
+The training data set:
+```{r eval=FALSE}
+trainpath <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+```
+
+The testing data set:
+```{r eval=FALSE}
+testpath <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+```
+```{r}
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainFile)) {
+  download.file(trainpath, destfile=trainFile, method="libcurl")
+}
+if (!file.exists(testFile)) {
+  download.file(testpath, destfile=testFile, method="libcurl")
+}
+training <- read.csv(trainFile, na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(testFile, na.strings=c("NA","#DIV/0!",""))
+```
+
+## Cleaning Data
+
+Removing variables with more than 60% missing values
+```{r}
+RMTrain <- training[, colSums(is.na(training)) <= 0.6*nrow(training)] 
+RMTest <- testing[, colSums(is.na(testing)) <= 0.6*nrow(testing)] 
+```
+
+### Removing First 7 variables that looks unimportant
+```{r}
+RMTrain <- RMTrain[-c(1:7)]
+RMTest <- RMTest[-c(1:7)]
+```
+
+### Removing Near to zero Variables
+```{r}
+zerovar <- nearZeroVar(RMTrain, saveMetrics = T)
+RMTrain <- RMTrain[, !zerovar$nzv]
+RMTest <- RMTest[, !zerovar$nzv]
+```
+
+##Data Slicing
+
+Now we are going to load a Training and a Validation Set.  We will use the validation data set to conduct cross validation in future steps.
+
+60% for the training
+40% for the testing
+
+```{r}
+set.seed(21541)
+inTrain <- createDataPartition(RMTrain$classe, p=0.60, list=F)
+mytraining <- RMTrain[inTrain,]
+mytesting <- RMTrain[-inTrain,]
+dim(mytraining);dim(mytesting)
+```
+
+## Looking for Correlations
+Standardize each variable to mean 0 and standard deviation 1 using scale().
+```{r}
+Mytrain_scale<- scale(mytraining[,-53],center=TRUE,scale=TRUE);
+descrCor <-  cor(Mytrain_scale)
+
+#Transpose the matrix to show the variables as rows rather than columns, just for convenient viewing,
+pheatmap(t(descrCor))
+```
+
+We descover that there are variable with high correlation, so we are going to work for solve this
+
+```{r}
+highCorr <- sum(abs(descrCor[upper.tri(descrCor)]) > .8)
+summary(descrCor[upper.tri(descrCor)])
+```
+
+## Data Modelling
+
+###Clasification Trees
+I tried different option witgh validation and Variables transformation (scaling). The better result was given by proproccesing with scaling and 10-fold cross validation
+```{r}
+set.seed(21541)
+modTree<- train(mytraining$classe ~ ., data = mytraining, method="rpart",preProcess=c("center", "scale"),trControl=trainControl(method = "cv", number = 10))
+predictionsTree <- predict(modTree, newdata =  mytesting)
+print(confusionMatrix(predictionsTree, mytesting$classe))
+```
+No so Good Result.
+
+
+### Boosting Model
+Applying Boosting method with 10-fold cross validation
+```{r}
+set.seed(21541)
+boostFit <- train(classe ~ ., method = "gbm", data = mytraining, verbose = F, trControl = trainControl(method = "cv", number = 10))
+boostFit
+```
+The boosting algorith perform better than the decition trees.
+
+### Ramdon Forest
+Now we are going to apply Random Forest with 10-fold cross validation to predict classe with all other predictors.
+```{r}
+set.seed(21541)
+rfFit <- train(classe ~ ., method = "rf", data = mytraining, importance = T, trControl = trainControl(method = "cv", number = 10))
+rfFit
+```
+
+The result from Random Forest was better than the preceeding two methods in the training set.
+
+```{r}
+dev.off()
+plot(rfFit, ylim = c(0.9, 1))
+```
+
+Now we are going to prove it in the Testing set
+
+```{r}
+rf.prediction <- predict(rfFit, mytesting)
+cfMatrix <- confusionMatrix(rf.prediction, mytesting$classe)
+cfMatrix$table
+```
+
+## Out of sample error
+The out of sample error shows to be really low.
+```{r}
+oose <- 1 - as.numeric(confusionMatrix(rf.prediction, mytesting$classe)$overall[1])
+oose
+plot(rfFit$finalModel)
+rfFit$finalModel
+```
+It is a very low oout of sample error rate: 0,94%.
+
+The final random forests model contains 500 trees with 27 variables tried at each split.
+
+## What is the importance of the predictors
+```{r fig.width=4}
+varImpPlot(rfFit$finalModel,cex=0.9, col ="blue", type=2)
+```
+
+
+##Prediction
+```{r}
+Prediction <- predict(rfFit, RMTest)
+Prediction
+```
+
+##Generating Files
+```{r}
+Files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+Files(Prediction)
+```
+
